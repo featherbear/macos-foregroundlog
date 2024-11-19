@@ -16,7 +16,7 @@ pub fn emitEvent(event: AppEvent) !void {
         return;
     }
 
-    try stdout.print("{s},{s},{s},{s}END\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
+    try stdout.print("{s},{s},{s},{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
 }
 
 pub fn main() !void {
@@ -43,6 +43,7 @@ pub fn main() !void {
     while (true) {
         const bytesRead = (try reader.readUntilDelimiter(&buffer, '\n')).len;
         const parsed = try std.json.parseFromSlice(LogStream, allocator, buffer[0..bytesRead], .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
 
         var evtObject = AppEvent{ .isForeground = std.mem.indexOf(u8, parsed.value.eventMessage, "foreground=1") != null, .timeString = parsed.value.timestamp, .path = undefined, .bundleId = null };
 
@@ -53,39 +54,39 @@ pub fn main() !void {
         const pidStr = parsed.value.eventMessage[startIdx..endIdx];
         const pid = try std.fmt.parseInt(u22, pidStr, 10);
 
-        if (pid == 0) {
-            parsed.deinit();
-            continue;
-        }
+        if (pid == 0) continue;
 
         // Strip macOS package path from image path
         const imagePath = try processUtil.image_path_of_pid(allocator, pid);
+        defer allocator.free(imagePath);
+
+        var bundleIdStrRef: ?[]const u8 = null;
+        defer if (bundleIdStrRef) |ref| {
+            allocator.free(ref);
+        };
 
         if (std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/")) |idx| {
             evtObject.path = imagePath[0..idx];
 
             const plistPath = try std.fmt.allocPrint(allocator, "{s}/Contents/Info.plist", .{imagePath[0..idx]});
+            defer allocator.free(plistPath);
+
             if (ChildProcess.run(.{
                 .allocator = allocator,
                 .argv = &[_][]const u8{ "/usr/bin/defaults", "read", plistPath, "CFBundleIdentifier" },
                 // .argv = &[_][]const u8{ "/usr/bin/mdls", "-name", "kMDItemCFBundleIdentifier", "-r", imagePath[0..idx] },
             })) |mdlsResult| {
-                allocator.free(mdlsResult.stderr);
-                evtObject.bundleId = mdlsResult.stdout;
-            } else |_| {}
+                defer allocator.free(mdlsResult.stderr);
+                bundleIdStrRef = mdlsResult.stdout;
 
-            allocator.free(plistPath);
+                if (mdlsResult.stderr.len == 0) {
+                    evtObject.bundleId = std.mem.trimRight(u8, mdlsResult.stdout, "\n");
+                }
+            } else |_| {}
         } else {
             evtObject.path = imagePath;
         }
 
         try emitEvent(evtObject);
-
-        if (evtObject.bundleId) |bundleIdPtr| {
-            allocator.free(bundleIdPtr);
-        }
-
-        allocator.free(imagePath);
-        parsed.deinit();
     }
 }
