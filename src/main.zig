@@ -33,19 +33,23 @@ pub fn main() !void {
         const parsed = try std.json.parseFromSlice(LogStream, allocator, buffer[0..bytesRead], .{ .ignore_unknown_fields = true });
         defer parsed.deinit();
 
+        const isForeground = std.mem.indexOf(u8, parsed.value.eventMessage, "foreground=1") != null;
+
         const prefix = "SETFRONT: pid=";
         const startIdx = std.mem.indexOf(u8, parsed.value.eventMessage, prefix).? + prefix.len;
         const endIdx = std.mem.indexOfPos(u8, parsed.value.eventMessage, startIdx, " ").?;
 
         const pidStr = parsed.value.eventMessage[startIdx..endIdx];
         const pid = try std.fmt.parseInt(u22, pidStr, 10);
+        if (pid == 0) continue;
 
         // Strip macOS package path from image path
         const imagePath = processUtil.image_path_of_pid(pid);
         const packagePath = "/Contents/MacOS/";
         const lastIdx = std.mem.lastIndexOf(u8, imagePath, packagePath) orelse imagePath.len;
 
-        try stdout.print("{s},{s}\n", .{
+        try stdout.print("{s},{s},{s}\n", .{
+            if (isForeground) "application" else "popup",
             parsed.value.timestamp,
             imagePath[0..lastIdx],
         });
