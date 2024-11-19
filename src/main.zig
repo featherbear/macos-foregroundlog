@@ -30,6 +30,12 @@ pub fn main() !void {
     proc.stderr_behavior = ChildProcess.StdIo.Ignore;
     try proc.spawn();
 
+    const bundleIdMap_maxItems = 10;
+    var bundleIdMap = std.StringArrayHashMap([]const u8).init(allocator);
+    try bundleIdMap.ensureTotalCapacity(bundleIdMap_maxItems);
+
+    defer bundleIdMap.deinit();
+
     // The max I've seen is around 5400 bytes
     var buffer: [8192]u8 = undefined;
 
@@ -60,29 +66,45 @@ pub fn main() !void {
         const imagePath = try processUtil.image_path_of_pid(allocator, pid);
         defer allocator.free(imagePath);
 
-        var bundleIdStrRef: ?[]const u8 = null;
-        defer if (bundleIdStrRef) |ref| {
-            allocator.free(ref);
-        };
-
         if (std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/")) |idx| {
             evtObject.path = imagePath[0..idx];
 
-            const plistPath = try std.fmt.allocPrint(allocator, "{s}/Contents/Info.plist", .{imagePath[0..idx]});
-            defer allocator.free(plistPath);
+            if (bundleIdMap.get(imagePath)) |bundleId| {
+                // std.debug.print("Got cache for {s} -> {s}\n", .{ imagePath, bundleId });
 
-            if (ChildProcess.run(.{
-                .allocator = allocator,
-                .argv = &[_][]const u8{ "/usr/bin/defaults", "read", plistPath, "CFBundleIdentifier" },
-                // .argv = &[_][]const u8{ "/usr/bin/mdls", "-name", "kMDItemCFBundleIdentifier", "-r", imagePath[0..idx] },
-            })) |mdlsResult| {
-                defer allocator.free(mdlsResult.stderr);
-                bundleIdStrRef = mdlsResult.stdout;
-
-                if (mdlsResult.stderr.len == 0) {
-                    evtObject.bundleId = std.mem.trimRight(u8, mdlsResult.stdout, "\n");
+                evtObject.bundleId = bundleId;
+            } else {
+                if (bundleIdMap.count() == bundleIdMap_maxItems) {
+                    // std.debug.print("Reached capacity for cached bundle ids\n", .{});
+                    var iterator = bundleIdMap.iterator();
+                    while (iterator.next()) |entry| {
+                        // std.debug.print("Freeing: {s} -> {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+                        allocator.free(entry.key_ptr.*);
+                        allocator.free(entry.value_ptr.*);
+                    }
+                    bundleIdMap.clearRetainingCapacity();
                 }
-            } else |_| {}
+
+                const plistPath = try std.fmt.allocPrint(allocator, "{s}/Contents/Info.plist", .{imagePath[0..idx]});
+                defer allocator.free(plistPath);
+
+                if (ChildProcess.run(.{
+                    .allocator = allocator,
+                    .argv = &[_][]const u8{ "/usr/bin/defaults", "read", plistPath, "CFBundleIdentifier" },
+                    // .argv = &[_][]const u8{ "/usr/bin/mdls", "-name", "kMDItemCFBundleIdentifier", "-r", imagePath[0..idx] },
+                })) |mdlsResult| {
+                    defer allocator.free(mdlsResult.stdout);
+                    defer allocator.free(mdlsResult.stderr);
+
+                    if (mdlsResult.stderr.len == 0) {
+                        const key = try allocator.dupe(u8, imagePath);
+                        const value = try allocator.dupe(u8, std.mem.trimRight(u8, mdlsResult.stdout, "\n"));
+
+                        evtObject.bundleId = value;
+                        try bundleIdMap.put(key, value);
+                    }
+                } else |_| {}
+            }
         } else {
             evtObject.path = imagePath;
         }
