@@ -3,9 +3,24 @@ const ChildProcess = std.process.Child;
 const processUtil = @import("./processUtil.zig");
 
 const LogStream = struct { eventMessage: []const u8, subsystem: []const u8, processID: c_int, timestamp: []const u8 };
-
+const AppEvent = struct {
+    isForeground: bool,
+    timeString: []const u8,
+    path: []const u8,
+};
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
+
+pub fn emitEvent(event: AppEvent) !void {
+    // if (!event.isForeground) return;
+
+    if (!event.isForeground and std.mem.eql(u8, event.path, "/System/Library/CoreServices/loginwindow.app")) {
+        try stdout.print("{s},{s}\n", .{ event.timeString, "screen lock" });
+        return;
+    }
+
+    try stdout.print("{s},{s},{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path });
+}
 
 pub fn main() !void {
     var allocatorBacking = std.heap.GeneralPurposeAllocator(.{}){};
@@ -51,10 +66,10 @@ pub fn main() !void {
 
         const lastIdx = std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/") orelse imagePath.len;
 
-        try stdout.print("{s},{s},{s}\n", .{
-            if (isForeground) "application" else "popup",
-            parsed.value.timestamp,
-            imagePath[0..lastIdx],
+        try emitEvent(AppEvent{
+            .isForeground = isForeground,
+            .timeString = parsed.value.timestamp,
+            .path = imagePath[0..lastIdx],
         });
     }
 }
