@@ -40,6 +40,14 @@ pub fn main() !void {
         const pidStr = parsed.value.eventMessage[startIdx..endIdx];
         const pid = try std.fmt.parseInt(u22, pidStr, 10);
 
-        try stdout.print("{s},{s}\n", .{ parsed.value.timestamp, processUtil.image_path_of_pid(pid) });
+        // Strip macOS package path from image path
+        const imagePath = processUtil.image_path_of_pid(pid);
+        const packagePath = "/Contents/MacOS/";
+        const lastIdx = std.mem.lastIndexOf(u8, imagePath, packagePath) orelse imagePath.len;
+
+        try stdout.print("{s},{s}\n", .{
+            parsed.value.timestamp,
+            imagePath[0..lastIdx],
+        });
     }
 }
