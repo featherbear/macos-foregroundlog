@@ -40,10 +40,14 @@ pub fn getppid_of_pid(pid: c.pid_t) c.pid_t {
     return @intCast(proc_pidinfo(pid).pbsi_ppid);
 }
 
-pub fn image_path_of_pid(pid: c.pid_t) []u8 {
+pub fn image_path_of_pid(allocator: std.mem.Allocator, pid: c.pid_t) ![]u8 {
     var s: [c.PROC_PIDPATHINFO_MAXSIZE]u8 = undefined;
     const r = @as(usize, @intCast(c.proc_pidpath(pid, &s, c.PROC_PIDPATHINFO_MAXSIZE)));
-    return s[0..r];
+
+    const result = try allocator.alloc(u8, r);
+    std.mem.copyForwards(u8, result, s[0..r]);
+
+    return result;
 }
 
 pub fn temp_image_name_of_pid(pid: c.pid_t) []u8 {

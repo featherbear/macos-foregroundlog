@@ -3,11 +3,8 @@ const ChildProcess = std.process.Child;
 const processUtil = @import("./processUtil.zig");
 
 const LogStream = struct { eventMessage: []const u8, subsystem: []const u8, processID: c_int, timestamp: []const u8 };
-const AppEvent = struct {
-    isForeground: bool,
-    timeString: []const u8,
-    path: []const u8,
-};
+
+const AppEvent = struct { isForeground: bool, timeString: []const u8, path: []const u8, bundleId: ?[]const u8 };
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
@@ -19,7 +16,7 @@ pub fn emitEvent(event: AppEvent) !void {
         return;
     }
 
-    try stdout.print("{s},{s},{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path });
+    try stdout.print("{s},{s},{s},{s}END\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
 }
 
 pub fn main() !void {
@@ -46,9 +43,8 @@ pub fn main() !void {
     while (true) {
         const bytesRead = (try reader.readUntilDelimiter(&buffer, '\n')).len;
         const parsed = try std.json.parseFromSlice(LogStream, allocator, buffer[0..bytesRead], .{ .ignore_unknown_fields = true });
-        defer parsed.deinit();
 
-        const isForeground = std.mem.indexOf(u8, parsed.value.eventMessage, "foreground=1") != null;
+        var evtObject = AppEvent{ .isForeground = std.mem.indexOf(u8, parsed.value.eventMessage, "foreground=1") != null, .timeString = parsed.value.timestamp, .path = undefined, .bundleId = null };
 
         const prefix = "SETFRONT: pid=";
         const startIdx = std.mem.indexOf(u8, parsed.value.eventMessage, prefix).? + prefix.len;
@@ -56,20 +52,40 @@ pub fn main() !void {
 
         const pidStr = parsed.value.eventMessage[startIdx..endIdx];
         const pid = try std.fmt.parseInt(u22, pidStr, 10);
-        if (pid == 0) continue;
+
+        if (pid == 0) {
+            parsed.deinit();
+            continue;
+        }
 
         // Strip macOS package path from image path
-        const imagePath_volatile = processUtil.image_path_of_pid(pid);
-        const imagePath = try allocator.alloc(u8, imagePath_volatile.len);
-        defer allocator.free(imagePath);
-        std.mem.copyForwards(u8, imagePath, imagePath_volatile);
+        const imagePath = try processUtil.image_path_of_pid(allocator, pid);
 
-        const lastIdx = std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/") orelse imagePath.len;
+        if (std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/")) |idx| {
+            evtObject.path = imagePath[0..idx];
 
-        try emitEvent(AppEvent{
-            .isForeground = isForeground,
-            .timeString = parsed.value.timestamp,
-            .path = imagePath[0..lastIdx],
-        });
+            const plistPath = try std.fmt.allocPrint(allocator, "{s}/Contents/Info.plist", .{imagePath[0..idx]});
+            if (ChildProcess.run(.{
+                .allocator = allocator,
+                .argv = &[_][]const u8{ "/usr/bin/defaults", "read", plistPath, "CFBundleIdentifier" },
+                // .argv = &[_][]const u8{ "/usr/bin/mdls", "-name", "kMDItemCFBundleIdentifier", "-r", imagePath[0..idx] },
+            })) |mdlsResult| {
+                allocator.free(mdlsResult.stderr);
+                evtObject.bundleId = mdlsResult.stdout;
+            } else |_| {}
+
+            allocator.free(plistPath);
+        } else {
+            evtObject.path = imagePath;
+        }
+
+        try emitEvent(evtObject);
+
+        if (evtObject.bundleId) |bundleIdPtr| {
+            allocator.free(bundleIdPtr);
+        }
+
+        allocator.free(imagePath);
+        parsed.deinit();
     }
 }
