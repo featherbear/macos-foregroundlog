@@ -44,9 +44,12 @@ pub fn main() !void {
         if (pid == 0) continue;
 
         // Strip macOS package path from image path
-        const imagePath = processUtil.image_path_of_pid(pid);
-        const packagePath = "/Contents/MacOS/";
-        const lastIdx = std.mem.lastIndexOf(u8, imagePath, packagePath) orelse imagePath.len;
+        const imagePath_volatile = processUtil.image_path_of_pid(pid);
+        const imagePath = try allocator.alloc(u8, imagePath_volatile.len);
+        defer allocator.free(imagePath);
+        std.mem.copyForwards(u8, imagePath, imagePath_volatile);
+
+        const lastIdx = std.mem.lastIndexOf(u8, imagePath, "/Contents/MacOS/") orelse imagePath.len;
 
         try stdout.print("{s},{s},{s}\n", .{
             if (isForeground) "application" else "popup",
