@@ -16,7 +16,7 @@ pub fn emitEvent(event: AppEvent) !void {
         return;
     }
 
-    try stdout.print("{s},{s},{s},{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
+    try stdout.print("{s},{s},\"{s}\",{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
 }
 
 pub fn main() !void {
