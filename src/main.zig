@@ -8,7 +8,7 @@ const AppEvent = struct { isForeground: bool, timeString: []const u8, path: []co
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 
-pub fn emitEvent(event: AppEvent) !void {
+fn emitCsv(event: AppEvent) !void {
     // if (!event.isForeground) return;
 
     if (!event.isForeground and std.mem.eql(u8, event.path, "/System/Library/CoreServices/loginwindow.app")) {
@@ -19,9 +19,34 @@ pub fn emitEvent(event: AppEvent) !void {
     try stdout.print("{s},{s},\"{s}\",{s}\n", .{ event.timeString, if (event.isForeground) "application" else "popup", event.path, if (event.bundleId) |bundleId| bundleId else "(null)" });
 }
 
+fn emitJson(event: AppEvent) !void {
+    var jsonWriter = std.json.writeStream(stdout, .{});
+    // if (!event.isForeground) return;
+
+    if (!event.isForeground and std.mem.eql(u8, event.path, "/System/Library/CoreServices/loginwindow.app")) {
+        try jsonWriter.write(.{ .time = event.timeString, .event = "screen lock" });
+        try stdout.writeByte('\n');
+
+        return;
+    }
+
+    try jsonWriter.write(.{ .time = event.timeString, .event = if (event.isForeground) "application" else "popup", .path = event.path, .bundleId = if (event.bundleId) |bundleId| bundleId else null });
+    try stdout.writeByte('\n');
+}
+
 pub fn main() !void {
     var allocatorBacking = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = allocatorBacking.allocator();
+
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    var shouldEmitAsJson = false;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            shouldEmitAsJson = true;
+        }
+    }
 
     const filter = "subsystem == 'com.apple.processmanager' AND eventMessage BEGINSWITH 'SETFRONT: pid='";
 
@@ -109,6 +134,10 @@ pub fn main() !void {
             evtObject.path = imagePath;
         }
 
-        try emitEvent(evtObject);
+        if (shouldEmitAsJson) {
+            try emitJson(evtObject);
+        } else {
+            try emitCsv(evtObject);
+        }
     }
 }

@@ -2,6 +2,8 @@
 
 Tracks foreground application switching
 
+Supply `--json` for JSONL output
+
 ---
 
 Logs look something like this
