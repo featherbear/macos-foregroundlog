@@ -34,6 +34,15 @@ fn emitJson(event: AppEvent) !void {
     try stdout.writeByte('\n');
 }
 
+var shouldEmitAsJson = false;
+fn emit(event: AppEvent) !void {
+    if (shouldEmitAsJson) {
+        try emitJson(event);
+    } else {
+        try emitCsv(event);
+    }
+}
+
 pub fn main() !void {
     var allocatorBacking = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = allocatorBacking.allocator();
@@ -41,7 +50,6 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
-    var shouldEmitAsJson = false;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--json")) {
             shouldEmitAsJson = true;
@@ -134,10 +142,6 @@ pub fn main() !void {
             evtObject.path = imagePath;
         }
 
-        if (shouldEmitAsJson) {
-            try emitJson(evtObject);
-        } else {
-            try emitCsv(evtObject);
-        }
+        try emit(evtObject);
     }
 }
